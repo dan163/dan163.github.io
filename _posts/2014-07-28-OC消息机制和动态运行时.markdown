@@ -1,0 +1,199 @@
+---
+layout: post
+title: OC消息机制和动态运行时
+date: 2014-07-28T14:07:36+08:00
+categories:
+    - iOS
+tags:
+    - OC消息机制
+---
+
+
+我们在初学Objective-C时，都会觉得ObjC中的方法调用和其他语言的Function Call 差不多，只是在ruby中，方法调用用消息传递这一概念来代替。
+
+实际上，这里忽略了包含着ObjC中最重要的特性-基于Runtime的动态特性。而ObjC的动态特性是基于Runtime的消息传递机制，在ObjC中，消息的传递都是动态的。
+
+ObjC作为一门面向对象的语言，自然具备面向对象的语言特性（封装、继承、多态）。同时它也具备静态语言的特性，又有动态特性（动态类型、动态绑定和动态加载）。
+
+## 基于Runtime的动态特性
+
+在苹果的官方文档中，对Runtime的介绍如下：
+
+> The Objective-C language defers as many decisions as it can from compile time and link time to runtime. Whenever possible, it does things dynamically. This means that the language requires not just a compiler, but also a runtime system to execute the compiled code. The runtime system acts as a kind of operating system for the Objective-C language; it’s what makes the language work.
+
+ObjC 面向Runtime的语言，它会尽可能地把决策从编译时和连接时推迟到运行时（简单来说，就是编译后的文件不全是机器指令，还有一部分中间代码，在运行的时候，通过Runtime再把需要转换的中间代码在翻译成机器指令）这使得ObjC有着很大的灵活性。比如：
+
+- 动态的确定类型
+- 我们可以动态的确定消息传递的对象
+- 动态的给对象增加方法的实现 等等
+
+那么，ObjC是如何实现这一灵活性？
+
+ObjC Runtime库是开源的，可从这里下载 http://opensource.apple.com/
+
+## 基于Runtime的消息传递机制
+
+ObjC之所以说是面向Runtime的语言，最重要的特征是其消息传递机制。
+
+什么是消息传递？消息传递不就和C语言的函数调用一个意思么。。
+
+在C语言中，我们调用函数时，必须先声明函数（或者自上而下），而实际上，声明函数就是获取函数地址，调用函数就是直接跳到地址执行，代码在被编译器解析、优化后，便是成为一堆汇编代码，然后连接各种库，完了生成可执行的代码（即是静态的）。
+
+在ObjC中，首先要搞清楚为什么不用Function Call 而用 Messaging 呢？一般调用函数（方法），讲的就是object对象，比如说：
+
+```python
+    person.say();
+```
+
+这里表示的就是person对象调用了say函数
+
+而Messaging则是从Runtime的角度上 比如说
+
+```python
+  [receiver doSomething];
+```
+
+
+编译后，则是成
+
+```python
+   objc_msgsend(receiver @selector(doSomething));
+```
+
+ 正确的理解应该是，表示你需要向receiver发送一个消息（doSomething），而此时receiver不一定调用了doSomething这个方法，这里分成两种情况：
+
+1.如果receiver是静态类型（类型已经强制声明了），则会在编译时LLVM会对其进行分析，如果无法响应该方法，编译无法通过
+2.如果receiver是动态类型（id），则在编译时跳过，然后在运行时，会去判断receiver是否去响应这个消息，在决策时执行这个方法，还是其他方法，或者转发给其他对象。另外，在ObjC中，可以向nil发送消息任意方法不会Crash。
+
+实际上，在发送以下方法时，都是在运行时动态判断的：
+
+```python
+respondsToSelector:
+isKindOfClass: / isMemberOfClass:
+instancesRespondToSelector:
+conformToProtrubyol:
+```
+
+等等
+
+## 消息传递的实现机制
+
+那么，ObjC是如何基于Runtime实现消息传递机制，消息传递机制又是怎样的。
+
+先来了解第一个概念Class
+
+什么是Class，在ObjC中，每个class实际上都有两个Class，the Class object （类对象）和 meta Class（元类）， the Class object 定义了instance method，metaClass 定义了class method，所以，每个class实际上是metaClass的一个单例。这里的类对象是编译器为每个类生成的有且只有一个的单例。而这个单例的isa指针指的是metaClass。因此，对应类的内存布局的理解是：
+
+1. 每个类实际上都有类对象和元类两个概念
+2. 类对象是编译器为每个类生成的有且只有一个的保存关于实例方法的信息的单例
+3. 元类则是保存类方法信息的
+4. 类对象时元类对象的一个单例 ，类对象的isa指针指向元类
+5. 类对象和元类都是基于objc_class结构的
+
+```python
+typedef struct objc_class *Class;
+struct objc_class
+{
+    Class isa;
+    Class super_class;     //父类
+    const char* name;    //类名
+    long version;            //版本信息
+    long info;                 //类信息
+    long instance_size;                                    //实例大小
+    struct objc_ivar_list *ivars;                        //实例参数链表
+    struct objc_method_list *methodLists;     //方法链表
+    struct objc_cache *cache;                         //方法缓存
+    struct objc_protrubyol_list *protrubyols;        //协议链表
+}
+```
+
+而NSObject的结构是：
+
+```python
+ struct NSObject{
+    objc_class *isa
+}
+```
+
+
+在objc中每个实例对象都有objc_class结构体的指针isa指向其类的类对象，而其类的类对象的isa指针指向其类的元类对象，该类的元类对象的isa指针指向NSObject的元类对象。NSObject的元类对象指向其类对象。
+
+至于super_class就不用说了吧。。
+
+具体的内存布局，可以参考此文章：http://www.cnblogs.com/csutanyu/archive/2011/12/12/Objective-C_memory_layout.html
+
+从ObjC的内存布局可以知道，通过isa指针，对象可以访问它对应的类的信息和相应的父类的信息，而消息机制便是通过isa指针来实现动态特性的。
+
+上面的方法链表中，里面存储的是Method类型的，这里有Method、SEL、IMP三个概念
+
+```python
+typedef struct objc_method *Method
+typedef struct objc_method{
+    SEL method_name;
+    char *method_type;
+    IMP method _imp;
+};
+SEL表示方法的签名，一般SEL = @selector();
+IMP 表示函数指针，其定义：
+typedef id(*IMP)(id,SEL,..)
+```
+
+
+前面两个是函数指针的对象和方法签名，后面就是函数的参数。 比如
+
+```python
+void(*setName_Func)(id, SEL, NSString*);
+setName_Func = (void(*)(id,SEL,NSString))[receiver methodForSelecor:@selector(setName:)];  //返回name的函数指针
+setName_Func(receiver,@selector(setName:),Liming); //通过函数指针调用函数
+```
+
+
+### 运行时消息的传递机制
+
+在ObjC中，消息只有在运行时才被绑定到方法的执行中，我们发送消息时，使用的是[]，而在运行时，被ObjC的Runtime库编译成
+
+objc_msgsend(receiver ,selector, arg1, arg2,...)
+
+这个函数给动态绑定做了以下工作：
+
+1.首先，它会根据给定的selector，找到相关的prrubyedure（执行方法），因为ObjC的多态性，所以寻找其prrubyedure是根据receiver的类
+2.call the prrubyedure，并且把相关的arg1，arg2等参数传给它
+3.返回prrubyedure的返回值。
+
+传递消息的关键点是编译器为每个对象和类所build的结构，这个结构包括：
+
+1.superclass的指针
+2.类的分派表，这个类的分派表包含了相关类的方法的地址
+
+这个结构由对象和类的isa指针指向
+（实际上，这里和我们上面讨论的内存布局相似）
+
+苹果文档关于运行时执行方法绑定的流程概述
+
+>When a message is sent to an object, the messaging function follows the object’s isa pointer to the class
+structure where it looks up the method selector in the dispatch table. If it can’t find the selector there,
+objc_msgSend follows the pointer to the superclass and tries to find the selector in its dispatch table. Successive
+failures cause objc_msgSend to climb the class hierarchy until it reaches the NSObject class. Once it lrubyates
+the selector, the function calls the method entered in the table and passes it the receiving object’s data structure.
+
+上面讲的是关于消息的绑定机制，而在运行时，还存在消息的转发机制
+
+前面我们讲过，在ObjC中，发送消息给一个不响应这个方法的对象，是合法的。之所以设计这种机制的原因，就是来模拟多重继承（ObjC中是不支持多重继承的）。转发机制是Runtime非常重要的特性，其机制大概如下：
+
+1.Runtime首先会进行消息绑定，通过父类的cache和分发表来绑定消息的执行方法
+
+2.如果没有，运行时会给类的对象发送+（BOOL）resolveInstanceMethod：（SEL）Name消息，这个消息的执行方法允许你在运行时给该类增加执行方法。如果消息返回的是YES，则会redispatch消息（就是对消息在进行绑定）
+
+3.如果2步骤还不行，Runtime会发送-（id）forwardingTargetForSelector：（SEL）aSelector，这个消息返回另外一个能响应该消息的对象，然后把消息转发给别的对象
+
+4.如果3步骤返回的对象是nil，或者是self，它会发送- (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector ，这里会返回一个方法签名用于Invrubyation，即- (void)forwardInvrubyation:(NSInvrubyation *)anInvrubyation.通过这个方法，你可以把消息转发给任意拥有相应执行方法的类（其实就是模拟多重继承）
+
+5.如果4步骤都不行，运行时就会发送消息 - (void)doesNotRecognizeSelector:(SEL)aSelector 给你的对象，执行这个方法将会抛出一个异常，然后程序就崩溃了。。
+
+摘至stackoverflow：
+
+>When you send a message to an object, the runtime will look for the implementation of the method in the class of the object (through the object's isa pointer). It's equivalent to sending -respondsToSelector: although the message itself is not dispatched. If the implementation of the method is found in the class or in its superclasses, it's called with all the arguments you passed in.
+If not, then the runtime gives the message a second chance to be executed. It will start by sending the message + (BOOL)resolveInstanceMethod:(SEL)name to the class of the object: this method allows you to add the method at runtime to the class: if this message returns YES, it means it can redispatch the message.
+If not it gives the message a third chance to be executed, it sends - (id)forwardingTargetForSelector:(SEL)aSelector with the selector, this method can return another object that may be able to respond to the selector on behalf of the actual receiver, if the returned object can respond, the method is executed and the value is returned as if it was returned by the original message. (Note: This is available beginning with OS X 10.6 or iOS 4.)
+If the returned object is nil or self (to avoid infinite loops), the runtime gives the message a fourth chance to execute the method… It sends the message - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector to get a method signature in order to build an invrubyation. If one is provided then an invrubyation is sent through the message - (void)forwardInvrubyation:(NSInvrubyation *)anInvrubyation. In this method you can parse the invrubyation and build other messages to send to other targets in any ways you want, and then you can set the return value of the invrubyation… That value will act as the return value of the original message.
+Finally, if no method signature is returned by the object, then the runtime sends the message - (void)doesNotRecognizeSelector:(SEL)aSelector to your object, the implementation of this method in NSObject class throws an exception.

@@ -1,14 +1,20 @@
 # Site
-title:              Moon
-bio:                'Minimal, one column jekyll theme.'
-description:        "Moon is a minimal, one column jekyll theme for your blog."
+title:              奔跑吧小羊
+bio:                '你知道吗?世间的美好事情是会散发着光芒的。'
+description:        "欢迎来到奔跑吧小羊的博客,这里记录着我的生活点滴、技术文章等等"
 reading_time:       true
 words_per_minute:   200
-logo:               'assets/img/logo.png'
-background:         'assets/img/placeholder-big.jpg'
+logo:               'assets/img/me.jpg'
+background:         'assets/img/bg.jpg'
 tiled_bg:           false   # Set this true if you want to tile your background image, otherwise it will be covered
-locale:             en_US
-url:                http://taylantatli.me/Moon
+locale:             zh-CN
+url:                ''
+
+# Left Block Images
+left_block_img:
+  homepage: assets/img/bg.png                           # this image will be shown on homepage's left block
+  post-list: assets/img/bg.jpg             # this image will be shown on post list page
+  default-post: assets/img/bg.jpg   # this image will be shown when post's front matter d
 
 # Jekyll
 permalink:          /:title/
@@ -22,7 +28,7 @@ kramdown:
   enable_coderay:   false
 mathjax:            true
 sass:
-  sass_dir:         _sass
+  sass_dir:         assets/_sass
   style:            compressed
 
 # Comments
@@ -37,19 +43,19 @@ disqus_shortname:   taylantatli
   #ad-client:
   #ad-slot:
 #bing-verify:
-#email:
-twitter:            username
-facebook:           username
-github:             username
+email:              yhp920116@sina.cn
+#twitter:            username
+#facebook:           username
+github:             https://github.com/yhp920116
 #stackoverflow:     123456/username   from a "http://stackoverflow.com/users/123456/username" link
 #linkedin:          username
 #xing:              username
-instagram:          username
+#instagram:          username
 #lastfm:            username
 #tumblr:            username
 #pinterest:         username
 #foursquare:        username
-steam:              username
+#steam:              username
 #dribbble:          username
 #youtube:           username
 #soundcloud:        username
