@@ -1,0 +1,751 @@
+---
+layout: post
+title: 深入objective-C中的Block
+date: 2014-07-31T11:01:36+08:00
+categories:
+    - iOS
+tags:
+    - block
+---
+
+
+Block作为C语言的扩展，在Mac OS X 10.6+，iOS4及之后被引进。
+
+## Block的基本概念
+
+对应Block的概念，苹果文档的介绍：
+
+> Block objects are a C-level syntactic and runtime feature. They are similar to standard C functions, but in addition to executable code they may also contain variable bindings to automatic (stack) or managed (heap) memory. A block can therefore maintain a set of state (data) that it can use to impact behavior when executed.
+
+引用《Pro Multithreading and Memeory Managment》的话，Block就是
+
+>“anonymous functions together with automatic(local) variables".
+
+块就是能够读取局部变量的匿名函数（类似闭包）。
+
+首先，block是匿名的一段代码块，block区别于function，定义function，一定要有function name，一般通过function name来调用function。比如
+
+```python
+^int (int num) {return num+1;};
+```
+
+而定义function
+
+```python
+int numFunc (int num) { return num +1;}  --> numFunc(3);
+```
+
+我们知道函数指针，因此，可以用块指针变量指向匿名的块，比如
+
+```python
+int (^blk) (int) = ^int (int num) { return num+1;};
+```
+
+
+这样，就可以通过块指针对块进行调用，
+
+```python
+blk(3)
+```
+
+block的基本语法 ^+返回值的类型+（参数及其类型），比如：
+
+```python
+^int (int num){ return num; };
+```
+
+其中，返回值的类型可以省略，如果省略返回值的类型，其返回值的类型就是代码块里面返回的值的类型。如果没参数时也可省略，如：
+
+```python
+^{ printf("我是一个没有返回值和参数的块。"); };
+```
+
+
+block因为是匿名函数，具备返回值、参数等，此外，它还能在执行block代码时capture 局部变量并保存（注意这里的执行不是调用），比如：
+
+```python
+int main{
+   int val = 10;
+   void (^blk) (void) = ^{ printf("%d\n",val)};
+   val = 2;
+   blk();  //打印出来的val值为10
+   return 0;
+}
+```
+
+那么，能在block块中对捕捉到的变量或者对象进行操作么？
+
+```python
+int main{
+   int val = 10;
+   void (^blk) (void) = ^{ val = 5;};//程序会抛出异常
+   blk();
+   return 0;
+}
+```
+
+如果是变量时局部变量，则不能进行赋值操作，此时捕捉到的局部变量只是个只读变量（除非使用__block)，如果是静态变量、静态全局变量和全局变量，则可以继续赋值操作。
+
+对象和变量的用法一致。
+
+另外要注意C语言的数组是不能被块捕捉到的，因此，避免使用：
+
+const char text[] = hello--->const char *text = hello
+
+
+## OC中的类和对象的实现机制
+
+我们在OC中偶尔会使用id类型来存储一个OC的对象，id表示任意的对象类型，类似于C的void *，我们可以在/usr/include/objc/objc.h钟找到id的定义方式：
+
+```python
+typedef struct objc_object {
+
+   Class isa;
+}*id;
+```
+
+从上面可以看到id是一个指向objc_object结构体的结构体指针。这里面包括一个Class的类，我们来看看这个类是怎么声明的（/usr/include/objc/runtime.h）
+
+```python
+typedef struct objc_class *Class;
+
+struct objc_class {
+    Class isa  OBJC_ISA_AVAILABILITY;
+
+#if !__OBJC2__
+    Class super_class                                        OBJC2_UNAVAILABLE;
+    const char *name                                         OBJC2_UNAVAILABLE;
+    long version                                             OBJC2_UNAVAILABLE;
+    long info                                                OBJC2_UNAVAILABLE;
+    long instance_size                                       OBJC2_UNAVAILABLE;
+    struct objc_ivar_list *ivars                             OBJC2_UNAVAILABLE;
+    struct objc_method_list **methodLists                    OBJC2_UNAVAILABLE;
+    struct objc_cache *cache                                 OBJC2_UNAVAILABLE;
+    struct objc_protocol_list *protocols                     OBJC2_UNAVAILABLE;
+#endif
+
+} OBJC2_UNAVAILABLE;
+```
+
+
+可以发现，objc_object里面的成员变量Class实际上是一个objc_class类型的结构体指针，也就是说，每个OC对象都有一个isa指针，指向一个objc_class的类对象（类其实也是个对象，是占用内存并在编译的时候由编译器编译生成的专门描述某个类的定义）。我们OC对象的自省机制、动态特性就是通过这个isa指针来实现的。
+
+- objc_object结构体是对象的基本结构
+
+- objc_class结构体是类的基本结构
+
+
+这里还可以发现类的结构体定义钟还有一个Class类型的isa指针，这个isa指针是指向元类对象（metaClass object），所有的元类对象都是指向NSObject的元类对象。如图所示：
+
+MyClass实例对象 -isa-> MyClass的类对象 -isa-> MyClass的元类对象 -isa-> NSObject元类对象 -isa->指向自己。
+
+
+上面仅仅是得了了实例对象该类的类信息，而MyClass的实例对象可能继承了AClass的类，为了得到整个类组织架构的信息，objc_class定义了第二个成员变量Class super_class，它指向父类，用于获取父类的信息。
+
+
+## Block的实现机制
+
+block是OC对C的扩展，因此，编译器在编译时，会把block的代码转化为标准的C代码，然后在编译。
+
+使用Clang的”-rewrite-objc"，可以把块转换成标准的C++代码
+
+先看看最简单的块实现
+
+```python
+int main
+{
+  void(^blk)(void) = ^{printf("Block\n")};
+  blk();
+  return 0;
+}
+```
+
+转换后的代码如下：
+
+```python
+struct __block_impl {
+    //这里的isa指针可以知道，块实际上也是一个OC对象
+    void *isa;
+    int Flags;
+    int Reserved;
+    void *FuncPtr;
+};
+
+
+//__main_block_impl_0是执行块代码时调用的函数
+
+//这里定义了一个__main_block_impl_0的结构体，里面包含了构造器
+struct __main_block_impl_0 {
+             struct __block_impl impl;
+             struct __main_block_desc_0* Desc;
+             __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc, int flags=0) {
+                           impl.isa = &_NSConcreteStackBlock;
+                           impl.Flags = flags;
+                           impl.FuncPtr = fp;
+                           Desc = desc;
+}
+};
+
+//__main_block_func_0是块代码里面执行的操作，块里面的操作都是绑定在这个函数
+
+//__main_block_impl_0里面保存着指向此函数的指针，块调用时，实际上是调用了此函数,这里的__cself指的是block本身
+static void __main_block_func_0(struct __main_block_impl_0 *__cself)
+{
+               printf("Block\n");
+}
+static struct __main_block_desc_0
+{
+            unsigned long reserved;
+            unsigned long Block_size;
+} __main_block_desc_0_DATA = {
+            0,
+            sizeof(struct __main_block_impl_0)
+};
+int main() {
+                 //这里的代码块实际上是调用了构造器，这里在栈中创建并初始化了一个__main_block_impl_0结构体的实例并指向blk这个块指针。
+                  void (*blk)(void) = (void (*)(void))&__main_block_impl_0((void *)__main_block_func_0,&__main_block_desc_0_DATA);
+                 ((void (*)(struct __block_impl *))((struct __block_impl *)blk)->FuncPtr)((struct __block_impl *)blk);
+                 return 0;
+
+}
+```
+
+我们不难发现，Block实际上是__main_block_impl_0结构体的实例，而Block实例则是由__main_block_impl_0结构体的构造器初始化的。
+
+在__main_block_impl_0结构体中，先声明了__block_impl类型的字段impl和__main_block_desc_0的字段desc，再创建了一个构造器，包括函数指针、desc和flag，并且在构造器中初始化了所有的字段。
+
+关于Struct结构类型和其构造器，需要注意几点：
+
+1. 对应Struct结构体，编译器会始终生成一个默认的构造器，若自己写默认构造器会出错，这里创建了包括三个参数的构造器，并在构造器中初始化所有字段（必须的）
+
+2. 默认的构造器为结构体名()，这里__main_block_impl_0的默认构造器为__main_block_impl_0()
+
+3. 默认的构造器不需要也不能自己定义，默认构造器会把所有的字段自动初始化为0
+
+4. 结构体的字段不能再声明的同时进行初始化，一般是在自己创建的构造器中进行初始化
+
+
+
+上面是最简单的一个块例子，仅仅用于输出一句话，那么，块捕捉局部变量的实现机制又是如何？
+
+```python
+int main()
+{
+  int val = 5;
+  const char *fmt = "val = %d\n";
+  void (^blk) (void) = ^{ printf(fmt,val);};
+  blk();
+  return 0;
+}
+```
+
+转换后的代码如下:
+
+```python
+//可以看到，在__main_block_impl_0的结构体中增加了fmt和val两个字段
+
+struct __main_block_impl_0 {
+           struct __block_impl impl;
+           struct __main_block_desc_0* Desc;
+           const char *fmt;
+           int val;
+           __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc,const char *_fmt, int _val, int flags=0) : fmt(_fmt),  val (_val) {
+                  impl.isa = &_NSConcreteStackBlock;
+                  impl.Flags = flags;
+                  impl.FuncPtr = fp;
+                  Desc = desc;
+                 }
+};
+
+//这里的__cself发挥作用了，它指向的是block本身，而在__main_block_impl_0中增加了捕捉到的两个变量，因此可以通过__cself对其进行访问
+static void __main_block_func_0(struct __main_block_impl_0 *__cself)
+{
+                   const char *fmt = __cself->fmt;
+                   int val = __cself->val;
+                   printf(fmt, val);
+}
+
+int main() {
+                  int dmy = 256;
+                  int val = 10;
+                  const char *fmt = "val = %d\n";
+                  void (*blk)(void) = &__main_block_impl_0(__main_block_func_0, &__main_block_desc_0_DATA, fmt, val);
+
+}
+```
+
+这里可以知道，在块中使用局部变量时，会在__main_block_impl_0结构体中增加两个字段，并通过构造器把对应的值赋值给他们并保存，在块调用时，通过__cself对成员变量进行访问。
+
+这里顺便说说前面的，为什么使用c语言数组，块是无法捕捉的。
+
+```python
+int main()
+{
+   const char text[] = "hello";
+   void(^blk)(void) = ^{printf"%c\n"，text[2];};
+   blk();
+   return 0;
+}
+```
+
+在块中使用c数组，会在__main_block_impl_0结构体中增加
+
+```python
+ struct __main_block_impl_0{
+              .....
+
+              const char text[]; //这里应该使用 const char *text;
+
+              .....
+}
+```
+
+而在实例化构造器时，我们是把text[2]作为参数发送过去，此时，就是出现把数组里面的元素赋值给数组这种语法错误。因此出错。
+
+而使用const char *text 指针的话，把text[2]作为参数发送则不会出现此类问题。
+
+我们知道，局部变量在块中是可读不可写的，如果在块中对局部变量进行赋值，编译器就会提示出错。而这种局限性会大大减少块的可用性，那么如何对变量的值进行修改呢？
+
+### 静态变量、静态全局变量或者全局变量
+
+```python
+int global_val = 1;
+
+static int static_global = 2;
+
+int main()
+{
+  static int static_val = 3;
+  void (^blk)(void) = ^{
+     global_val += 1;
+     static_global += 2;
+     static_val += 2;
+  }
+  return 0;
+}
+```
+
+转换后的代码是：
+
+```python
+struct __main_block_impl_0 {
+             struct __block_impl impl;
+             struct __main_block_desc_0* Desc;
+             int *static_val;
+             __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc,int *_static_val, int flags=0) : static_val(_static_val) {
+                       impl.isa = &_NSConcreteStackBlock;
+                       impl.Flags = flags;
+                       impl.FuncPtr = fp;
+                       Desc = desc;
+             }
+};
+```
+
+因为静态全局变量和全局变量都是可访问的，因此block只是在__main_block_impl_0的结构体中加一个静态变量的成员变量，然后在构造器中把值赋给它。
+
+```python
+static void __main_block_func_0(struct __main_block_impl_0 *__cself) {
+              int *static_val = __cself->static_val;
+              global_val *= 1;
+              static_global_val *= 2;
+              (*static_val) *= 3;
+}
+```
+
+可以看到，在__main_block_func_0中，global_val和static_global_val都是可以直接访问的，而静态局部变量的访问则是先通过指针来访问并修改的。
+
+那么对于局部变量，为什么也不能通过指针的方式进行访问修改呢？
+
+因为局部变量的生命周期只存在其scope上，而块作为工作单元，很有可能会使用在局部变量的scope外，而此时局部变量已经随着栈展开而被销毁，此时如果对局部变量还使用指针访问就会出现错误，因此，块对局部变量的设计是只读的。
+
+遵循块的这种设计，块会记录执行时局部变量的值，而后其改变都不会影响块里面的值，而且，如果在块中对局部变量进行赋值修改，编译器就会出错。
+
+
+
+### 使用__block
+
+__block用于当你想修正局部变量的值时使用，那么__block是如何工作的？
+
+```python
+__block int val = 1;
+
+void(^blk)(void) = ^{ val = 3};
+```
+
+
+代码转换后便是：
+
+```python
+struct __Block_byref_val_0 {
+
+     void *isa;
+
+     __Block byref _val_0 *__forwarding;
+
+    int __flags;
+
+    int __size;
+
+    int val;
+
+}
+
+struct __main_block_impl_0 {
+    struct __block_impl impl;
+    struct __main_block_desc_0* Desc;
+
+    __Block_byref_val_0 *val;
+
+    __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc,__Block_byref_val_0 *_val, int flags=0) : val(_val->__forwarding) {
+                 impl.isa = &_NSConcreteStackBlock;
+
+                 impl.Flags = flags;
+
+                 impl.FuncPtr = fp;
+
+                 Desc = desc; }
+};
+static void __main_block_func_0(struct __main_block_impl_0 *__cself)
+{
+    __Block_byref_val_0 *val = __cself->val;
+    (val->__forwarding->val) = 1;
+}
+static void __main_block_copy_0( struct __main_block_impl_0*dst, struct__main_block_impl_0*src)
+{
+    _Block_object_assign(&dst->val, src->val, BLOCK_FIELD_IS_BYREF);
+}
+static void __main_block_dispose_0(struct __main_block_impl_0*src) {
+    _Block_object_dispose(src->val, BLOCK_FIELD_IS_BYREF);
+}
+static struct __main_block_desc_0 {
+    unsigned long reserved;
+    unsigned long Block_size;
+    void (*copy)(struct __main_block_impl_0*, struct __main_block_impl_0*);
+    void (*dispose)(struct __main_block_impl_0*);
+} __main_block_desc_0_DATA = {
+    0,
+    sizeof(struct __main_block_impl_0),
+
+    __main_block_copy_0,
+
+    __main_block_dispose_0
+};
+int main()
+{
+   __Block_byref_val_0 val = {
+      0,
+      &val,
+      0,
+      sizeof(__Block_byref_val_0),
+     10
+  };
+  blk = &__main_block_impl_0(
+  __main_block_func_0, &__main_block_desc_0_DATA, &val, 0x22000000);
+  return 0;
+
+}
+```
+
+
+## Block的内存机制
+
+从前面的学习我们可以得出两个结论：
+
+1. 块本质上是结构体的构造函数的一个实例，它是在栈上的
+
+2. __Block变量也是结构体的实例，它也是在栈上的。
+
+3. 块本质上也是个对象，从上面看到的是，它的类是_NSConcreteStackBlock
+
+实际上，块的类型有三种：
+
+- _NSConcreteStackBlock
+- _NSConcreteGlobalBlock
+- _NSConcreteMallocBlock
+
+那么，块的类型是如何确定的？
+
+以下情况，块的类型是NSConcreteGlobalBlock（块是此类型时，其保存在数据区，data section）:
+
+1. Block作为全局变量使用时
+
+2. Block没用捕捉到自由变量时
+
+至于NSConcreteMallocBlock，首先，我们知道NSConcreteStackBlock类型的block是在栈上的，也就是说，在Block所在的scope外，Block和__block变量都会被销毁，而我们知道block本质上是一个对象，对象不能总是在栈上吧。而当block的类型为NSConcreteMallockBlock时，此时在block就是在heap(堆）上的。
+
+那么，如何让块从栈上转移到堆上。
+
+在ARC中，很多情况下，Block都会自动被从栈拷贝到堆上。比如当Block作为方法的返回值：
+
+```python
+typedef int (^blk_t) (int);
+
+blk_t func(int rate)
+
+{
+
+  return ^(int count){ return rate *cout};
+
+}
+```
+
+在ARC中会被自动转换为：
+
+```python
+blk_t func(int rate)
+
+{
+
+  blk_t tmp = &__func_block_imp_0 (__fun_block_func_0, &__func_block_desc_0_DATA,rate);
+
+  tmp = objc_retainBlock(tmp);//在运行时被转换为 tmp = _Block_copy(tmp)
+
+  return objc_autoreleaseReturnValue(tmp);
+
+}
+```
+
+在返回块时，编译器会自动把它复制到堆上。
+
+上面我们说到很多情况下，Block会被自动拷贝到堆上，那么。。。什么情况下是需要我们手动来copy的？
+
+
+**如果Block被当做方法和函数的参数时**
+
+
+但是在Cocoa Framework的方法中，如果名字包含“usingBlock”，或者是CGD的API，Block在当做参数时，还是不需要手动Copy，因为。。方法里面copy了。比如：
+
+NSArray 的实例方法  enumerateObjectUsingBlock:时，则不需要对block进行copy操作。而：
+
+```python
+-(id)getBlockArray
+
+{
+
+  int val = 10;
+
+  return [NSArray alloc] initWithObjects:^{NSLog(@"blk0:%d",val),^{NSLog(%"blk1:%d",val)},nil};
+
+}
+
+id obj = getBlockArray();
+
+typedef void^(blk_t)(void)
+
+blk_t blk = (blk_t)[obj objectAtIndex:0];
+
+blk();
+```
+
+此时，当执行blk()时，程序就会崩溃，这是因为，把块当做参数时，除去上面提及的情况，如果不copy的话，离开块的scope会被销毁，因此调用抛出异常。
+
+Block虽然在很多情况下能被自动拷贝到堆区，但这并不代表Block每次都会被自动拷贝，因为把Block从栈拷贝到堆，是需要消耗一定cpu资源，如果栈上的block都被拷贝到堆上，就是浪费cpu资源。
+
+因此，修改如下：
+
+```python
+  return [NSArray alloc] initWithObjects:[^{NSLog(@"blk0:%d",val) copy]; [^{NSLog(@"blk1:%d",val)} copy]};
+```
+
+
+那么，如果对_NSConcreteGlobalBlock类型的Block进行copy会怎样？
+
+1. 如果是_NSConcreteStackBlock类型进行copy，则会使之从Stack转移到Heap上
+
+2. 如果是_NSConcreteGlobalBlock类型进行copy，则do nothing...
+
+3. 如果是_NSConcreteMallocBlock类型进行copy，则引用计数加1
+
+
+实际上，在ARC中，如果你不确定是否需要copy，对Block使用copy是安全的（不会出现内存泄露），比如：
+
+```python
+blk = [[[[blk copy] copy] copy] copy];
+```
+
+因为每次copy后，都会开辟不同的内存，而之前的内存会因为没有强指针指向而被自动销毁，因此，多次copy也是安全的
+
+
+## __block Variables的内存机制
+
+假设我们在块（栈中）使用了__block的变量，如果Block从栈复制到堆中，Block里面的__block变量有两种情况：
+
+1. 如果_block变量也是在栈中时，copy时会复制拷贝一份到堆上
+
+2. 如果_block变量在堆上（可能是被其他块使用，因此已经在堆上了），则会复制其指针。
+
+
+这里讲讲在Modern Objective-C关于内存的两个概念：指针复制和内存拷贝
+
+我们在非ARC中经常可以看到retain、copy、mutableCopy等，这些内存概念在有些时候并不像词义上般理解，容易造成混淆。而在ARC中，则是使用指针指向来表示内存概念，即Strong，当blk_t blk = ^{val = 3;};时，blk就是指向块的强指针，内存只有没有指向才会被释放。大多数情况下我们只需要知道copy的用法
+
+1. 如果发送copy方法的对象的不是对象（NSObject对象），如变量、结构体的实例（__block变量），则copy会拷贝新的内存到heap上，此时为内存拷贝。
+
+2. 如果发送copy的方法是可变对象（NSMutableObject对象），则copy还是会在heap上创建一份新内存，此时为内存拷贝。
+
+3. 如果发送copy的方法时不可变对象（NSObject对象），则copy实则是指针拷贝，同Stong。
+
+前面对应__block变量，其结构体为
+
+```python
+struct __Block_byref_val_0 {
+
+     void *isa;
+
+     __Block byref _val_0 *__forwarding;
+
+    int __flags;
+
+    int __size;
+
+    int val;
+
+}
+```
+
+这里有个_forwarding的指针，指向的是本身。前面我们会有疑问：为什么要有个_forwarding指针再绕一圈...（val->__forwarding-val)
+
+```python
+__block int val = 1;  //操作1
+
+void (^blk) (void) = [^{++val;} copy]; //操作2
+
+++val; //操作3
+
+blk(); //操作4
+```
+
+上面，我们首先定义了一个__block变量，这个__block变量时位于栈上的。接着我们创建了一个块^{++val;}，并对它发送copy消息，经过操作2后，这时：
+
+1. 在栈上，有^{++val;}和__block int val
+
+2. 因为copy操作，在heap上，也有^{++val;}和__block int val变量
+
+如果没有_forwarding指针，那么操作3的值为2；操作4的值为2，也就是说，对__block的变量同时在栈上和堆上的操作其实只是对栈上__block变量和堆上__block变量的操作，而这两个变量不是指向同一内存地址。
+
+因此，我们必定需要_forwarding指针来确保无论在栈上val运算还是堆上val运算，它们指的是同一内存地址。我们来看看__forwarding 是怎么工作的
+
+1. 在栈上是__forwarding指针指向的是自己，即val->__forwarding->val。而在操作2后
+
+2. 栈上的__forwarding指向的是堆上对应的__block变量结构体的实例，而堆上的__block变量的__forwarding指针则是指向的自己。
+
+3. 这样，就可以建立起栈上和堆上的关系，即使在操作2后，操作3、4操作的实际上还是同一块内存地址。
+
+
+
+前面我们介绍了Block捕捉局部变量的机制，在前面捕捉局部变量时，我们知道__main_block_impl_0的结构体里会增加对应类型的字段。再来看看Block捕捉对象的机制
+
+```python
+blk_t blk;
+{
+  id array = [[NSMutableArray alloc] init];
+  blk = [^(id obj){
+             [array addObject:obj];
+             NSLog(@"array count = %d",[array count]);
+             }  copy];
+}
+
+blk([[NSObject alloc] init]);
+
+blk([[NSObject alloc] init]);
+
+blk([[NSObject alloc] init]);
+```
+
+我们知道array的scope是在{}内，而当调用块时，array此时应该是被释放销毁了，因此调用块时，应该是出现carsh，而输出的是：
+
+```python
+array count = 1;
+
+array count = 2;
+
+array count = 3;
+```
+
+没问题！！我们来看看此时在实现机制:
+
+```python
+struct __main_block_impl_0 {
+              struct __block_impl impl;
+              struct __main_block_desc_0* Desc;
+              id __strong array;
+              __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc,id __strong _array, int flags=0) : array(_array) {
+                    impl.isa = &_NSConcreteStackBlock;
+                    impl.Flags = flags;
+                    impl.FuncPtr = fp;
+                    Desc = desc;}
+
+};
+```
+
+。。。。
+
+不是说C结构体是不能有_strong的成员变量（字段）？为什么这里有id __strong array?
+
+编译器总是希望能对内存进行适当的监测和管理，而编译器对C Struct的初始化和销毁却不能监测，因此，C结构体中不能有_strong的成员变量。
+
+但是，OC的Runtime库却是能监测到什么时候Block从栈被复制到堆上，什么时候Block在堆上被销毁，因此，编译器还是能很好的管理其内存。实现如下：
+
+```python
+static void __main_block_copy_0(struct __main_block_impl_0 *dst,struct __main_block_impl_0 *src)
+{
+      _Block_object_assign(&dst->array, src->array, BLOCK_FIELD_IS_OBJECT);
+}
+```
+
+这里为了能让编译器能管理其内存，调用了_Block_object_assign函数并把目标对象（捕捉的对象）赋值给块结构体的成员变量（字段）array，此时成员变量array指向了目标对象。这里_Block_object_assgin类似retain方法。
+
+```python
+static void __main_block_dispose_0(struct __main_block_impl_0 *src)
+{
+      _Block_object_dispose(src->array, BLOCK_FIELD_IS_OBJECT);
+}
+```
+
+这里从函数名看出，类似于release方法，用于释放对象。
+
+```python
+static struct __main_block_desc_0 {
+   unsigned long reserved;
+   unsigned long Block_size;
+   void (*copy)(struct __main_block_impl_0*, struct __main_block_impl_0*);
+   void (*dispose)(struct __main_block_impl_0*);
+
+}
+```
+
+这里发现有两个分别交copy和dispose的函数指针，这copy函数是当Block从栈上被复制到堆时调用的。
+
+下面几种情况，块是从栈被复制到堆上的：
+
+1. 对栈上的Block发送copy消息
+
+2. 方法\函数返回值为Block类型
+
+3. Block赋值给id，或者在Block类型的变量用__strong标识符，编译器会自动调用_Block_copy函数
+
+4. 如果Block作为方法的参数，包括前面说的“usingBlock”或者使GCD的API
+
+而dispose函数是Block在堆上被释放或者没人指向它时调用的。
+
+使用__block标识符时，其机制和上面差不多，唯一的不同是：
+
+```python
+BLOCK_FIELD_IS_OBJECT--->BLOCK_FIELD_IS_BYREF
+```
+
+
+上面的代码中，如果把copy方法去掉，则会出现错误。出现错误的原因有：
+
+1. 块并没有从栈中复制一份到堆上，因此，其scope有限
+
+2. 没有调用copy方法，就不会实现__main_block_copy_0的函数，而这个函数正是实现将目标对象赋值给结构体的_strong成员变量
+
+因此，如果希望块能捕捉到局部对象，除了下面几种情况，你都必须要调用copy方法
+
+1. Block作为函数的返回值
+
+2. Block被赋值给id的变量或者给Block前面加上__strong标识符
+
+3. 在GCD和cocoaFramework中包含“usingBlock”的方法
+

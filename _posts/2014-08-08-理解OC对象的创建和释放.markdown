@@ -1,0 +1,197 @@
+---
+layout: post
+title: 理解Stack、Heap及OC对象的创建和释放
+date: 2014-08-08T11:10:14+08:00
+categories:
+    - iOS
+tags:
+    - 内存
+---
+
+## Stack、Heap的概念
+
+我们一开始学习编程时，知道值类型是在stack上创建的，引用类型是在heap上创建的。那么stack和heap在内存上究竟是怎样的呢？
+
+**stack和heap保存在哪里?**
+
+stack和heap都是保存在随机存取存储器（RAM Random Access Memory），也就是我们平常所说的内存（条），RAM是与CPU直接交换数据的内部存储器，断电后会丢失信息，因为可读写，速度快，因此通常作为操作系统或程序运行时临时数据存放的地方。
+
+我们知道，一个操作系统中的程序的运行活动就是进程，进程中可以包含若干线程（thread），一个标准的线程是由线程ID，当前指令指针、寄存器集合（CPU组成部分，因此，线程是消耗CPU资源）和堆栈（就是栈）组成的。
+
+在多线程的应用程序中，每个线程都有其自己的stack（堆栈），但是，多个不同线程是共享资源的（也就是共享heap），这也意味的多线程需要一定的调控来防止不会再同一时间内访问相同的heap空间。
+
+因此：
+
+- stack是内存为线程分配的活动空间，stack读取速度相对heap更快，一般用于存储本地数据（如数值类型），对象指针（如创建对象后返回的地址）和函数参数。比如我们在A函数内又调用了B函数，执行A函数时，会先在栈顶分配一个A函数的block，里面保存局部变量与数据，当调用到B函数并执行其代码时，又会在A函数的block上（也就是栈顶）分配一个B函数的block。B函数执行完成并return后，B函数的block被释放，里面的变量和数据会被销毁，等A函数的代码执行完成后，其block又会被释放，里面的变量和数据也被销毁。stack总是按照先进后出的顺序（LIFO）保留数据。
+- heap则是动态分配内存的空间，你必须手动创建内存空间并释放它。heap的读取速度比stack慢些，在stack中，操作变量都是对内存空间的直接操作（访问模式是基于指针的递增和递减，并且由于常用，会被映射到处理器的缓存中），而在heap，则是通过对象指针进行操作。
+
+## GNUstep关于alloc、retain、release和dealloc的实现
+
+GNUstep(http://www.gnustep.org/)，文档介绍：
+
+The framework closely follows Apple's Cocoa (formerly NeXT's OpenStep) APIs but is portable to a variety of platforms and architectures.
+
+GNUstep是开源框架，通过GNUstep，可以了解苹果Cocoa框架的实现。
+
+### 调用NSObject的alloc方法，如下
+
+```python
+id obj = [NSObject alloc];
+```
+
+在GNUstep的实现是：
+
+```python
++(id)alloc{ return [self allocWithZone:NSDefaultMallocZone()]; }
+
++(id)allocWithZone:(NSZone *)z { return NSAllocateObject (self, 0, z);}
+
+struct obj_layout{ NSUInteger retained;};
+
+inline id
+
+NSAllocateObject(Class aClass, NSUInteger extraBytes, NSZone *zone)
+{
+int size = /* needed size to store the object */
+id new = NSZoneMalloc(zone, size);
+memset(new, 0, size);
+new = (id)&((struct obj_layout *)new)[1];
+}
+```
+
+我们可以看到NSZone类，NSZone是最初用于防止内存碎片化的，通过把空间根据内存大小分成具有规则的块，可以使内存的使用效率提高，不过如今，ObjC的Runtime有更好的内存管理算法，因此，在Cocoa框架，这种使用NSZone来优化内存已被弃用。除去NSZone的相关代码，alloc方法可以重写为：
+
+```python
+struct obj_layout{ NSUInteger retained; };
+
++(id)alloc{
+int size = sizeof(struct obj_layout) + size_of_the_object;
+struct obj_layout *p = (struct obj_layout *)calloc(1,size);
+return (id)(p+1);
+}
+```
+
+上面定义了结构体obj_layout，里面有个NSUInteger的 retained，在alloc方法里，先是确定了空间大小（包括结构体和对象），再通过calloc方法创建1个size大小的空间（calloc动态分配内存后，空间为被初始化为零），把空间的首地址赋给obj_layout类型的指针变量p，最后返回指针变量p指向下一个obj_layout类型元素的首地址。
+
+为什么要返回p+1的首地址呢？
+
+GNUstep的NSObject对象在创建时，在内存块的header保存一个obj_layout的结构体，里面保存retained的变量，这个变量保存的数字就是reference count（引用计数），在header的下面保存的才是对象，这也是为什么前面的size是obj_layout和对象空间的总和。
+
+如上图所示，p+1才是指向的对象的首地址。
+
+我们通过发送retainCount可以得到对象的引用计数值，
+
+```python
+id obj = [[NSObject alloc]  init];
+
+NSLog(@"retainCount = %d",[obj retainCout]);
+```
+
+其实现方法如下：
+
+```python
+- (NSUInteger)retainCout { return NSExtraRefCount(self)+1; }
+
+inline NSUInteger
+
+NSExtraRefCount(id anObject){
+return ((struct obj_layout *)anObject)[-1].retained;
+}
+```
+
+根据上图可以知道，把对象指针从指向对象首地址-1指向内存空间块的首地址，对象指针被转换为指向obj_layout类型，从而获取到结构体类型变量retained的值并返回。因为使用calloc动态分配的内存被初始化为零，因此结构体的变量retained的值也是为0。实际上calloc动态分配内存空间后，此时引用计数应为1，因此上面+1.
+
+那么retain方法呢？
+
+```python
+[obj retain];
+
+-(id)retain { NSIncrementExtraRefCount(self); return self; }
+
+inline void
+
+NSIncrementExtraRefCount(id anObject){
+if (((struct obj_layout *)anObject)[-1].retained == UINT_MAX - 1)
+     [NSException raise: NSInternalInconsistencyException format: @"NSIncrementExtraRefCount() asked to increment too far"];
+((struct obj_layout *)anObject)[-1].retained++;
+}
+```
+
+调用retain方法，实际上是让obj_layout结构体的变量retained自增。release方法呢？
+
+```python
+[obj release];
+
+- (void)release { if (NSDecrementExtraRefCoutWasZero(self) [self dealloc];};
+
+Bool NSDecrementExtraRefCoutWasZero(id anObject){
+if(((struct obj_layout *)anObject)[-1].retained == 0){
+return YES;
+}else{
+(struct obj_layout*)anObject[-1].retained--;
+return NO;
+}
+}
+```
+
+调用release方法时，先会获取obj_layout结构体变量retained的值，若值为0，则返回YES并调用dealloc方法，否则，则对retained变量自减。
+
+```python
+- (void)dealloc { NSDeallocateObject(self); }
+
+inline void
+
+NSDeallocateObject(id anObject){
+struct obj_layout *o = &((struct obj_layout *)anObject)[-1];
+free(o)
+}
+```
+
+上面可以知道GNUstep中对alloc、retain、release的实现，通过这认识，我们可以猜测苹果Cocoa框架的实现方式
+
+## 苹果对alloc、retain、release和dealloc的实现
+
+通过Xcode的调试器lldb，可以看到关于alloc的实现：
+
+```python
++alloc-->+allocWithZone-->class_createInstance -->calloc
+```
+
+alloc的实现过程除了class_createInstance，其他和GNUstep差不多，而class_createInstance则是ObjC的Runtime特性。我们可以发现，基于Runtime的动态特性是ObjC非常重要的特征。
+
+那么retainCount、retain和release呢？
+
+```python
+-retainCount
+__CFDoExternRefOperation
+CFBasicHashGetCountOfKey
+
+-retain
+__CFDoExternRefOperation
+CFBasicHashAddValue
+
+-release
+__CFDoExternRefOperation
+CFBasicHashRemoveValue
+
+int __CFDoExternRefOperation(uintptr_t op, id obj) {
+        CFBasicHashRef table = get hashtable from obj;
+
+int count;
+    switch (op) {
+    case OPERATION_retainCount:
+    count = CFBasicHashGetCountOfKey(table, obj);
+    return count;
+    case OPERATION_retain:
+    CFBasicHashAddValue(table, obj);
+    return obj;
+    case OPERATION_release:
+    count = CFBasicHashRemoveValue(table, obj);
+    return 0 == count;
+    }
+}
+```
+
+上面的实现方法可以知道：苹果是通过哈希表（reference counter table）来控制引用计数（不同于GNUstep），所有的引用计数都是保存在哈希表的词目上。
+
+这种管理方式的最大优点是监控和管理内存，在出现内存问题是，通过哈希表有助于程序的调试。

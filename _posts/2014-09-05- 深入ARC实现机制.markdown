@@ -1,0 +1,329 @@
+---
+layout: post
+title: 深入ARC实现机制
+date: 2014-07-31T11:01:36+08:00
+categories:
+    - iOS
+tags:
+    - 内存
+---
+
+## ARC的概念
+
+苹果文档对应ARC的描述：
+
+>Automatic Reference Counting (ARC) is a compiler feature that provides automatic memory management of Objective-C objects. Rather than having to think about retain and release operations, ARC allows you to concentrate on the interesting code, theobject graphs, and the relationships between objects in your application.
+
+>ARC is supported in Xcode 4.2 for OS X v10.6 and v10.7 (64-bit applications) and for iOS 4 and iOS 5. Weak references are not supported in OS X v10.6 and iOS 4.
+
+Clang3.0及以上都支持ARC，Xcode5去掉ARC的勾选项默认支持ARC。
+
+
+
+## ARC的基本用法
+
+在ARC中，任意的对象类型和id都必须有以下4中类型标识符之一：
+
+- __strong
+- __weak
+- __unsafe_unretained
+- __autoreleasing
+
+### __strong(强引用）
+
+类似C++的std::shared_ptr
+
+所有的对象类型和id的默认标识符都是__strong，变量标识为__strong时，表示拥有对象的ownership。比如：
+
+```python
+id obj = [NSMutableArray array] //（MRC）the obj doesn't have the ownership of the mutableArray
+id obj = [NSMutableArray array];-->（ARC）id __strong obj = [NSMutable array]; //the obj have the ownership of the mutableArray
+```
+
+另外，任意标示为__strong,__weak,_autoreleasing的变量，如果没有初始化时，其默认值都被初始化为nil，比如，
+
+```python
+id __strong obj0; -->id _strong obj0 = nil;
+
+id __weak obj1; -->id __weak obj1 = nil;
+
+id __autoreleasing obj2; -->id __autoreleasing obj2 = nil;
+```
+
+### __weak（弱引用）
+
+类似C++的std::weak_ptr
+
+__weak指针一般用于解决循环引用，变量标识为__weak时，为弱引用，指向对象但不拥有对象的ownership。比如，
+
+```python
+id __weak obj = [[NSObject alloc] init];
+```
+
+NSObject创建后，因为obj是__weak标识，所以没有其ownership，会有以下的警告：
+
+```python
+warning: assigning retained obj to weak variable; obj will bereleased after assignment [-Warc-unsafe-retained-assign]
+id __weak obj = [[NSObject alloc] init];
+```
+
+一般的__weak的用法是这样：
+
+```python
+id __strong obj = [[NSObject alloc] init];
+id __weak obj1 = obj;
+```
+
+### Circular Reference（循环引用）
+
+循环引用主要有两种类型：
+
+- 类与类之间的循环引用
+- 类本身的循环应用
+
+假设我们有个继承NSObject的Test类，里面有一strong标识符实例变量_obj，还有一方法
+
+```python
+-(void)setObject:(id __strong)obj;{
+    id test1 = [[Test alloc] init]; //test1-->A
+    id test2 = [[Test alloc] init]; //test2 -->B
+    [test1 setObject:test2]; //_obj(A)->B
+    [test2 setObject:test1];//__obj(B)-->A
+}
+```
+
+离开{}后，test1和test2变量被销毁，A和B对象应该被销毁，但是因为A对象里面的_obj还指向B，而B对象里面的_obj还指向A，所以，A和B循环引用，引发内存泄露。
+
+```python
+{
+    id test = [[Test alloc] init]; //test -->A
+    [test setObject:test]; //_obj(A)-->test
+}
+```
+
+离开{}后，test变量被销毁，A对象应该被销毁，当时因为A对象里面的_obj还指向自己，所以不会被销毁，也就是说，A自己内循环引用，内存泄露。
+
+还有一种常见的块的循环引用
+
+```python
+typedef void(^blk_t)(void);
+
+@interface MyObject:NSObject{
+         blk_t blk;
+}
+
+- (id)init{
+    self = [super init];
+    blk = ^{NSLog(@"self = %@,self";)};
+    return self;
+}
+```
+
+这里是块引起的类的循环引用。
+
+两种不同类型的循环引用，其原因都是类中的实例变量ivar都是__strong类型，因此在类与类的组合中容易出现循环引用，而实际上，我们的设计原则应该是这样的：如果实例变量指向的对象存在时，我们需要能通过实例变量指向它但不拥有其ownership，如果其不存在，则实例变量便指向nil。这样的话就不会出现循环引用。
+
+修改如下
+
+```python
+{
+id __weak _obj;
+}
+
+- (void)setObject:(id __strong)obj;
+
+id __weak cself = self;
+
+blk = ^{NSLog(@"self = %@,cself";)};
+```
+
+在使用__weak指针时，如果指向的对象销毁了，__weak的指针会指向nil（对应的nil对象时null)。
+
+iOS4使用的是_unsafe_unretained来代替__weak,__weak在iOS5以上使用。
+
+### __unsafe_unretained
+
+__unsafe_unretained 标识的指针也是没有对象的ownership，这个类似也__weak,比如，
+
+```python
+id _unsafe_unretained obj = [[NSObject alloc] init];
+
+warning: assigning retained obj to unsafe_unretained variable;obj will be released after assignment [-Warc-unsafe-retained-assign] id __unsafe_unretained obj = [[NSObject alloc] init];
+```
+
+__unsafe_unretained与__weak的不同在于，__weak指向的对象销毁后，__weak指针会指向null对象，而__unsafe_unretained的指针则还是指向销毁的对象（此时的指针叫dangling pointer)，我们知道对象被销毁后，不会被立即置零，因此如果使用__unsafe_unretained指针还是可以访问被销毁的对象，但是此时的访问属于非法访问！使用__unsafe_unretained会使你的程序鲁棒性降低，除非你确保使用__unsafe_unretained的指针一直存在且被强指针指向，不然程序容易崩溃。
+
+### __autoreleasing
+
+在使用autorelease和__autoreleasing时，我们常常不知道对象究竟是在什么时候被释放。
+
+苹果文档有相关说明：
+
+>The AppKit and UIKit frameworks process each event-loop iteration (such as a mouse down event or a tap) within an autorelease pool block
+
+RunLoop中的每个事件的迭代都会伴随着一个自动释放池。RunLoop每次在完成一个事件后，会销毁相应的自动释放池，而在分派一个事件前，又会生成一个自动释放池。
+
+当你发送autorelease消息给一个对象，或者使用_autoreleasing标识符时，实际上对象就会被注册到当前事件内的自动释放池，当事件完成后，注册到自动释放池的所有对象都会被自动释放。
+
+
+最简单的例子是：
+
+```python
+applicationDidFinishLaunching:
+```
+
+当执行这个方法时，实际上是触发程序已经启动完成的事件，而此时会生成一个该事件相应的自动释放池，当该方法完成后，这个自动释放池会被销毁，也就是说，该方法里面注册到自动释放池的所有对象也会被释放。
+
+例如IBAction，通过LLDB来debugger可以发现有相关UIKit方法来控制事件和Runloop。
+
+回归正题：__autoreleasing
+
+实际上，我们很少会使用到__autoreleasing标识符，clang编译器帮我们做了一些工作。我们看看之前的例子
+
+```python
+id __strong obj = [NSMutableArray Array]; //实际上，这里的NSMutableArray对象被注册到自动释放池
+```
+
+再来看一个
+
+```python
++(id)array{
+    id obj = [[NSMutableArray alloc]  init];        //这里__strong 的obj指向可变数组对象
+    return obj;
+}
+```
+
+当返回obj时，离开了obj的scope后，obj指针被销毁，此时到可变数组对象应该也被销毁，当时编译器注意这里的对象应该需要传给caller，因此会把对象注册的自动释放池。
+
+标识了__weak的对象同样也被注册到自动释放池，如
+
+```python
+id __weak obj1 = obj0;   等同于：
+
+id __weak obj1 = obj0;
+
+id __autoreleasing tmp = obj1;
+```
+
+因为__weak没有获取到对象的ownership，对象又可能随时会被销毁，对象被销毁后__weak会指向null对象，而OC对nil发送消息是合法的，因此这样使用__weak会出现问题。
+
+所以编译器对此做出的优化就是把__weak指向的对象注册到自动释放池中，对象只有到自动释放池被销毁时才会被释放，保证了使用__weak的安全性。
+
+任意指向id或者NSObject类型指针的指针变量默认都是_autoreleasing标识符的，
+
+```python
+id *obj -->id _autoreleasing *obj
+
+NSObject **obj --> NSObject * _autoreleasing *obj //obj指针变量时指向指向NSObject对象的指针变量
+```
+
+比如：
+
+```python
+- (BOOL) performOperationWithError:(NSError **)error;
+```
+我们经常在cocoa Framework看到这种技术，把对象指针（指针变量）作为参数传递，为了保证在离开scope后不会被销毁，这里实际上是NSError * __autoreleasing *，比如：
+
+```python
+{
+      NSError *error;
+      [reciever didFailWithError:&error];
+}
+
+- (void)didFailWithError:(NSError **)error;
+```
+
+如上，方法虽然没有把返回NSError，但是由于方法中的参数error指针变量（指针对象）指向了指向NSError的对象指针，但离开{}scope后，NSError*error这个对象指针会被释放，因此方法参数中的指针变量（指针对象）就会指向nil，而编译器侦查后，认为方法参数的指针变量还需要使用NSError的对象指针，所以NSError的对象指针被注册到自动释放池上。
+
+另外，在ARC中，把对象指针赋值给另一对象指针变量，其类型标识符要保持一致。
+
+因此，这样是错误的：
+
+```python
+NSError *error = nil； -->NSError _strong *error = nil;
+
+NSError **pError = &error;  -->NSError * _autoreleasing *pError = &error
+```
+
+修改如下：
+
+```python
+NSError *error = nil;
+
+NSError * _strong *pError = &error;
+```
+
+但是
+
+```python
+NSError *error = nil;  //_strong
+
+Bool result = [obj performOperationWithError:&error]; //__autoreleasing
+
+怎么又可以了呢？。。。编译器这里会注意到类型的不同，然后修改为:
+
+NSError _strong *error = nil;
+
+NSError _autoreleasong *tmp = error; //__autoreleasing
+
+Bool result = [obj performOperationWithError:&tmp]; //__autoreleasing
+```
+
+从上面总结可以看出：在使用__autorelasing标识符时，变量必须要是局部变量。
+
+
+
+使用ARC需要注意的几个点
+
+- 在C结构体中不能使用对象类型的成员变量（字段）
+
+- id和void*必须使用__bridge cast
+
+
+
+
+## 桥接转换
+
+
+在非ARC时，我们可以进行以下操作：
+
+```python
+id obj0 = [[NSObject alloc]  init];
+void *obj0 = obj0;
+```
+
+上面的操作是允许的，可在ARC中，会出现错误，错误信息为：
+
+```python
+error: implicit conversion of an Objective-C pointer to 'void *' is disallowed with ARC void *p = obj;
+```
+
+因此，我们需要进行桥接转换，桥接转换类型有三种：
+
+### __bridge cast
+
+使用__bridge转换时要注意，转换后的对象指针是没有对象的ownership(类似于__unsafe_unretained)，因此必须要仔细操作对象内存，不然会出现dangling pointer。（使用__strong标识后呢？）
+
+```python
+void *obj0 = (__bridge void *)[[NSObject alloc] init];
+
+//编译器不会显示警告，但是创建的NSObject对象实际上已经被销毁，也就是说obj指针对象目前是一个dangling pointer
+
+void * __strong obj1 = (__bridge void *)[[NSObject alloc] init];
+
+NSLog(@"class = %@",[(__bridge id)obj0 class]);
+
+NSLog(@"class = %@",[(__bridge  id)obj1 class]);
+
+//虽然正确能打印出class类型，当实际上，这个对象已经被释放，o只是还没被销毁，因此可以打印出其类型
+```
+
+### __bridge_retained cast
+
+等同于retain操作，转换后的对象指针拥有对象的ownership。
+
+
+
+### __bridge_transfer cast
+
+等同于release操作
