@@ -122,7 +122,7 @@ body {
 	margin: -3rem auto 4rem;
 	background: $white;
 	color: $color_tuatara;
-	padding: 2em 30px 2em 30px;
+	padding: 2em 20px 2em 20px;
 	//border-radius: 3px;
 	//box-shadow: 0 0 10px 0 rgba($color_shark,0.3);
 	@include transition(.5s);
@@ -268,7 +268,7 @@ header .entry-meta {
 }
 
 .content {
-  padding: 60px;
+  padding: 40px 40px 60px 40px;
   max-width: 600px;
   margin: 0 auto;
 }
