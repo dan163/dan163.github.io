@@ -697,6 +697,22 @@ canvas {
   }
 }
 
+#about {
+  .logo {
+    top: 20px;
+    left: 20px;
+    position: absolute;
+    pointer-events: auto;
+    img {
+      width: 50px;
+      height: auto;
+    }
+    &:after {
+      display: none;
+    }
+  }
+}
+
 .section-title {
   font-size: 80px;
   position: absolute;
