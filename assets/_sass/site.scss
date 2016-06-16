@@ -117,14 +117,14 @@ body {
 	}
 }
 #disqus_thread {
-	width: 75%;
+	width: 100%;
 	max-width: 850px;
 	margin: -3rem auto 4rem;
 	background: $white;
 	color: $color_tuatara;
-	padding: 2em;
-	border-radius: 3px;
-	box-shadow: 0 0 10px 0 rgba($color_shark,0.3);
+	padding: 2em 30px 2em 30px;
+	//border-radius: 3px;
+	//box-shadow: 0 0 10px 0 rgba($color_shark,0.3);
 	@include transition(.5s);
 	@media #{$small} {
 		width: 90%;
