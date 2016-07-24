@@ -1,21 +1,21 @@
 /*
 Error: Undefined variable: "$font1".
-        on line 29 of base.scss
+        on line 16 of site.scss
 
-24:   height: 100%;
-25:   line-height: 1.2
-26: }
-27: 
-28: body {
-29:   font-family: $font1;
-30:   color: $overlay-color;
-31:   background: $white;
-32: }
-33: 
-34: a {
+11: html {
+12: 	@extend %extend1;
+13: }
+14: body {
+15: 	@extend %extend1;
+16: 	font-family: $font1;
+17: 	@include font-rem($doc-font-size);
+18: 	color: $color_tuatara;
+19: 	background-color: $white;
+20: 	background-position: center center;
+21: 	background-attachment: fixed;
 
 Backtrace:
-base.scss:29
+site.scss:16
 /usr/local/lib/ruby/gems/2.3.0/gems/sass-3.4.22/lib/sass/script/tree/variable.rb:49:in `_perform'
 /usr/local/lib/ruby/gems/2.3.0/gems/sass-3.4.22/lib/sass/script/tree/node.rb:58:in `perform'
 /usr/local/lib/ruby/gems/2.3.0/gems/sass-3.4.22/lib/sass/tree/visitors/perform.rb:397:in `visit_prop'
@@ -67,4 +67,4 @@ base.scss:29
 body:before {
   white-space: pre;
   font-family: monospace;
-  content: "Error: Undefined variable: \"$font1\".\A         on line 29 of base.scss\A \A 24:   height: 100%;\A 25:   line-height: 1.2\A 26: }\A 27: \A 28: body {\A 29:   font-family: $font1;\A 30:   color: $overlay-color;\A 31:   background: $white;\A 32: }\A 33: \A 34: a {"; }
+  content: "Error: Undefined variable: \"$font1\".\A         on line 16 of site.scss\A \A 11: html {\A 12: 	@extend %extend1;\A 13: }\A 14: body {\A 15: 	@extend %extend1;\A 16: 	font-family: $font1;\A 17: 	@include font-rem($doc-font-size);\A 18: 	color: $color_tuatara;\A 19: 	background-color: $white;\A 20: 	background-position: center center;\A 21: 	background-attachment: fixed;"; }
