@@ -1,12 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="eba400a6-eafc-46c1-9838-312186b18b04" name="Default" comment="">
-      <change type="NEW" beforePath="" afterPath="$PROJECT_DIR$/assets/img/wo.png" />
-      <change type="NEW" beforePath="" afterPath="$PROJECT_DIR$/about/index.md" />
-      <change type="MOVED" beforePath="$PROJECT_DIR$/about/index.html" afterPath="$PROJECT_DIR$/intro/index.html" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/.idea/workspace.xml" afterPath="$PROJECT_DIR$/.idea/workspace.xml" />
-    </list>
+    <list default="true" id="eba400a6-eafc-46c1-9838-312186b18b04" name="Default" comment="" />
     <ignored path="Moon.iws" />
     <ignored path=".idea/workspace.xml" />
     <ignored path=".idea/dataSources.local.xml" />
