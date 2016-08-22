@@ -6,7 +6,7 @@ comments: true
 categories:
     - iOS
 tags:
-    - 内存
+    - iOS开发
 ---
 
 ## 变量在内存是个什么东西？
