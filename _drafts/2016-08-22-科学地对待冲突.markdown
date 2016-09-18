@@ -1,0 +1,28 @@
+---
+layout: post
+title: 科学地对待冲突
+date: 2016-09-02T03:29:02+08:00
+comments: true
+categories:
+    - 生活小常识
+tags:
+    - 生活小常识
+---
+
+![alt text][id]
+
+[id]: ../assets/img/lemons.jpg "Title"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
