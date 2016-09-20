@@ -1,6 +1,6 @@
 ---
 layout: post
-title: 最好产品之路
+title: 最优产品之路
 date: 2016-09-01T03:09:02+08:00
 comments: true
 categories:
